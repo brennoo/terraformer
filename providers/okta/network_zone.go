@@ -16,47 +16,48 @@ package okta
 
 import (
 	"github.com/GoogleCloudPlatform/terraformer/terraformutils"
-	"github.com/okta/okta-sdk-golang/v2/okta"
+	"github.com/okta/okta-sdk-golang/v5/okta"
 )
 
 type NetworkZoneGenerator struct {
 	OktaService
 }
 
-func (g NetworkZoneGenerator) createResources(networkZoneList []*okta.NetworkZone) []terraformutils.Resource {
+func (g NetworkZoneGenerator) createResources(networkZoneList []okta.ListNetworkZones200ResponseInner) []terraformutils.Resource {
 	var resources []terraformutils.Resource
 	for _, networkZone := range networkZoneList {
+		var zone []terraformutils.Resource
+		if networkZone.DynamicNetworkZone != nil {
 
-		resources = append(resources, terraformutils.NewResource(
-			networkZone.Id,
-			networkZone.Name,
-			"okta_network_zone",
-			"okta",
-			map[string]string{
-				"name": networkZone.Name,
-				"type": networkZone.Type,
-			},
-			[]string{},
-			attributesNetworkZone(networkZone),
-		))
+			zone = DynamicNetworkZone(networkZone)
+			resources = append(resources, zone...)
+
+		}
+		if networkZone.IPNetworkZone != nil {
+			zone = IPNetworkZone(networkZone)
+			resources = append(resources, zone...)
+		}
+		//resources = append(resources, zone...)
 	}
+
 	return resources
+
 }
 
 func (g *NetworkZoneGenerator) InitResources() error {
-	ctx, client, err := g.Client()
+	ctx, client, err := g.ClientV5()
 	if err != nil {
 		return err
 	}
 
-	output, resp, err := client.NetworkZone.ListNetworkZones(ctx, nil)
+	output, resp, err := client.NetworkZoneAPI.ListNetworkZones(ctx).Execute()
 	if err != nil {
 		return err
 	}
 
 	for resp.HasNextPage() {
-		var networkZoneSet []*okta.NetworkZone
-		resp, _ = resp.Next(ctx, &networkZoneSet)
+		var networkZoneSet []okta.ListNetworkZones200ResponseInner
+		resp, _ = resp.Next(&networkZoneSet)
 		output = append(output, networkZoneSet...)
 	}
 
@@ -64,25 +65,74 @@ func (g *NetworkZoneGenerator) InitResources() error {
 	return nil
 }
 
-func attributesNetworkZone(networkZone *okta.NetworkZone) map[string]interface{} {
-	attributes := map[string]interface{}{}
-	attributes["usage"] = networkZone.Usage
+func IPNetworkZone(zone okta.ListNetworkZones200ResponseInner) []terraformutils.Resource {
+	var resource []terraformutils.Resource
+	resource = append(resource, terraformutils.NewResource(
+		*zone.IPNetworkZone.Id,
+		zone.IPNetworkZone.Name,
+		"okta_network_zone",
+		"okta",
+		map[string]string{
+			"name": zone.IPNetworkZone.Name,
+			"type": zone.IPNetworkZone.Type,
+		},
+		[]string{},
+		attributesIPNetworkZone(zone),
+	))
+	return resource
+}
 
-	if networkZone.Type == "DYNAMIC" {
-		if networkZone.Locations != nil {
-			attributes["dynamic_locations"] = networkZone.Locations
-		}
-	} else if networkZone.Type == "IP" {
-		switch {
-		case networkZone.Proxies != nil && networkZone.Gateways != nil:
-			attributes["proxies"] = networkZone.Proxies
-			attributes["gateways"] = networkZone.Gateways
-		case networkZone.Proxies != nil && networkZone.Gateways == nil:
-			attributes["proxies"] = networkZone.Proxies
-		case networkZone.Proxies == nil && networkZone.Gateways != nil:
-			attributes["gateways"] = networkZone.Gateways
-		}
+func attributesIPNetworkZone(zone okta.ListNetworkZones200ResponseInner) map[string]interface{} {
+	attributes := map[string]interface{}{}
+	attributes["usage"] = zone.IPNetworkZone.Usage
+	if zone.IPNetworkZone.Proxies != nil {
+		attributes["proxies"] = zone.IPNetworkZone.Proxies
 	}
+	if zone.IPNetworkZone.Gateways != nil {
+		attributes["gateways"] = zone.IPNetworkZone.Gateways
+	}
+
+	return attributes
+}
+
+func DynamicNetworkZone(zone okta.ListNetworkZones200ResponseInner) []terraformutils.Resource {
+	var resource []terraformutils.Resource
+	resource = append(resource, terraformutils.NewResource(
+		*zone.DynamicNetworkZone.Id,
+		zone.DynamicNetworkZone.Name,
+		"okta_network_zone",
+		"okta",
+		map[string]string{
+			"name": zone.DynamicNetworkZone.Name,
+			"type": zone.DynamicNetworkZone.Type,
+		},
+		[]string{},
+		attributesDynamicNetworkZone(zone),
+	))
+	return resource
+
+}
+func attributesDynamicNetworkZone(zone okta.ListNetworkZones200ResponseInner) map[string]interface{} {
+	attributes := map[string]interface{}{}
+	attributes["usage"] = *zone.DynamicNetworkZone.Usage
+	attributes["proxytype"] = *zone.DynamicNetworkZone.ProxyType
+	attributes["status"] = *zone.DynamicNetworkZone.Status
+	if zone.DynamicNetworkZone.Locations != nil {
+		dynamicLocations := []string{}
+		for _, location := range zone.DynamicNetworkZone.Locations {
+			locationStr := ""
+			if location.Region != nil {
+				locationStr = *location.Region
+			} else {
+				locationStr = *location.Country
+			}
+
+			// Append the formatted location string to dynamicLocations slice
+			dynamicLocations = append(dynamicLocations, locationStr)
+		}
+		attributes["dynamic_locations"] = dynamicLocations
+	}
+	attributes["asns"] = zone.DynamicNetworkZone.GetAsns()
 
 	return attributes
 }
